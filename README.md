@@ -1,6 +1,8 @@
 # PanelGen-studio
 A procedural Blender add-on for creating customizable 3D wall art, with full control over shapes, details, and dimensions, featuring seamless 3D model export for 3D printing.
 PANELGEN STUDIO 1.0 — PLUGIN AUTONOMO
+<img width="3834" height="1884" alt="Screenshot" src="https://github.com/user-attachments/assets/538197da-0777-4b3a-8784-29b6622df67a" />
+
 
 Compatibilita: Blender 5.1 o successivo; prove eseguite su Blender 5.1.2. Non e certificato per versioni precedenti.
 
