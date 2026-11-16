@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PanelGen Web – Configuratore pannelli 3D</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--bd:#ddd;--ac:#2563eb;--pn:#f6f6f7;--wr:#b45309}
+@media(prefers-color-scheme:dark){:root{--bg:#161618;--fg:#eee;--mut:#999;--bd:#333;--ac:#5b8cff;--pn:#1e1e21;--wr:#fbbf24}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font:13px system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+#app{display:flex;height:100%}
+aside{width:380px;max-width:100%;overflow-y:auto;padding:12px;background:var(--pn);border-right:1px solid var(--bd)}
+main{flex:1;position:relative;min-width:0}
+canvas{width:100%;height:100%;display:block;cursor:grab}
+h1{font-size:17px;margin:0 0 8px}
+details{border:1px solid var(--bd);border-radius:8px;margin:8px 0;background:var(--bg)}
+summary{cursor:pointer;padding:8px 10px;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.in{padding:2px 10px 10px}
+.row{margin:7px 0 0}
+.row>label{display:flex;justify-content:space-between;font-size:12px;margin-bottom:1px}
+.row .c{display:flex;gap:6px;align-items:center}
+input[type=range]{flex:1;min-width:0}
+input[type=number]{width:70px;padding:3px;border:1px solid var(--bd);border-radius:5px;background:var(--bg);color:var(--fg)}
+select,input[type=text],input[type=email],textarea{width:100%;padding:6px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}
+button{padding:8px 11px;border:0;border-radius:6px;background:var(--ac);color:#fff;font:inherit;cursor:pointer;margin:4px 4px 0 0}
+button.sec{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+#info{position:absolute;left:10px;bottom:10px;max-width:calc(100% - 20px);background:var(--pn);border:1px solid var(--bd);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--mut);white-space:pre-line}
+#warn{color:var(--wr);font-size:12px;margin-top:6px}
+#msg{margin-top:8px;color:var(--ac)}
+.note{font-size:11px;color:var(--mut);margin-top:6px}
+@media(max-width:760px){#app{flex-direction:column-reverse}aside{width:100%;height:58%;border-right:0;border-top:1px solid var(--bd)}main{height:42%;flex:none}}
+</style>
+</head>
+<body>
+<div id="app">
+<aside>
+ <h1>PanelGen Web</h1>
+ <div id="ui"></div>
+ <details open><summary>Il tuo contatto</summary><div class="in">
+  <input type="text" id="nome" placeholder="Nome e cognome" autocomplete="name">
+  <div class="row"><input type="text" id="tel" placeholder="Telefono" autocomplete="tel" inputmode="tel"></div>
+  <div class="row"><input type="email" id="email" placeholder="Email" autocomplete="email"></div>
+  <div class="row"><textarea id="note" rows="3" placeholder="Note o richieste"></textarea></div>
+  <input type="text" id="hp" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px" aria-hidden="true">
+  <div class="row"><label style="display:block"><input type="checkbox" id="priv"> Acconsento al trattamento dei miei dati per ricevere il riepilogo e essere ricontattato. <span style="color:var(--mut)">(Informativa privacy: <a href="privacy.html" target="_blank">leggi</a>)</span></label></div>
+ </div></details>
+ <div>
+  <button id="bSend">Invia la mia configurazione</button>
+  <button id="bPdf" class="sec">Scarica PDF</button>
+  <button id="bCopy" class="sec">Copia configurazione</button>
+  <button id="bLoad" class="sec">Carica configurazione</button>
+ </div>
+ <details id="exp"><summary>Esporta per stampa 3D</summary><div class="in">
+  <button id="bStlAll" class="sec">Pannello intero (STL)</button>
+  <button id="bStlNoBase" class="sec">Solo rilievi (STL)</button>
+  <button id="bZipInd" class="sec">Singoli senza base (ZIP)</button>
+  <button id="bZipBase" class="sec">Singoli con base (ZIP)</button>
+  <button id="bZipSec" class="sec">Settori con base (ZIP)</button>
+  <div class="note">Gli STL conservano le coordinate del pannello. Gli ZIP includono un manifest.json con righe, colonne e offset.</div>
+ </div></details>
+ <div id="warn"></div><div id="msg"></div>
+ <input type="file" id="fLoad" accept=".json" hidden>
+</aside>
+<main><canvas id="c"></canvas><div id="info"></div></main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+/* ====== DA PERSONALIZZARE ====== */
+const OWNER_EMAIL = "tua@email.it";   // fallback: apre l'email del cliente
+const WORKER_URL = "";                 // URL del Cloudflare Worker (vedi worker.js): invia la mail al cliente e il 3D a te
+const SEND_STL = true;                 // allega l'STL alla mail che ricevi tu (se supera 8 MB viene inviato solo il link)
+const FORM_URL = "";                   // alternativa senza worker: es. "https://formspree.io/f/xxxxxxx" (solo testo)
+const SHOW_EXPORT_TO_CLIENT = true;    // false = nasconde la sezione export STL/ZIP al cliente
+/* =============================== */
+
+const $=id=>document.getElementById(id),D2R=Math.PI/180,clamp=(x,a=0,b=1)=>Math.min(Math.max(x,a),b);
+
+/* ---------- Schema dei controlli (nomi e valori di default = PanelGen Studio 1.0) ---------- */
+const R=(k,l,mn,mx,st,df,show)=>({k,l,t:'r',mn,mx,st,df,show}),S=(k,l,o,df,show)=>({k,l,t:'s',o,df,show}),C=(k,l,df,show)=>({k,l,t:'c',df,show});
+const orbOn=c=>c.orbOn,orbOff=c=>!c.orbOn;
+const SCHEMA=[
+{g:'Numero e dimensione degli oggetti',open:1,f:[
+ R('W','Larghezza pannello (mm)',10,2000,1,300),R('L','Lunghezza pannello (mm)',10,2000,1,300),
+ R('cntX','Colonne X',1,200,1,5),R('cntY','Righe Y',1,200,1,8),
+ S('sizeMode','Dimensione',['Automatico massimo','Diametro manuale'],0),
+ R('blkD','Diametro blocco (mm)',0.4,500,0.1,34,c=>c.sizeMode==1),
+ S('gapMode','Spaziatura',['Riempimento precedente','Gap esatto, forme invariate'],1),
+ R('gap','Gap (mm) – 0 unisce il layer',0,30,0.1,1),
+ R('gapFloor','Gap minimo (mm)',0.4,30,0.1,0.4)]},
+{g:'Altezza',open:1,f:[
+ S('driver','Sorgente',['Picco mobile','Picchi procedurali','Immagine B/N','Noise','Combinato'],0),
+ R('minH','Altezza minima (mm)',0.8,100,0.1,6),R('maxH','Altezza massima (mm)',1,500,0.5,40),
+ R('pkR','Raggio influenza (mm)',1,2000,1,120),R('soft','Inizio decadimento (mm)',0,1900,1,0),
+ S('fallT','Tipo di decadimento',['Lineare','Smooth','Esponenziale','Gaussiano'],1),
+ R('fallP','Potenza (esponenziale)',0.1,10,0.1,2,c=>c.fallT==2),
+ R('cx','Centro picco X (mm)',-1000,1000,1,0),R('cy','Centro picco Y (mm)',-1000,1000,1,0),
+ R('cs','Scala influenza',0.1,10,0.05,1),R('EF','Scala effetto',0.01,10,0.01,1),
+ R('HS','Scala altezza',0.01,10,0.01,1),C('inv','Inverti altezza',false),
+ R('hNoise','Variazione altezza da flusso (mm)',0,50,0.5,0),
+ R('flowScale','Scala flusso (mm)',1,2000,1,150),R('flowOct','Ottave flusso',0,8,1,2),R('flowSeed','Seme flusso',0,1000000,1,0)]},
+{g:'Picchi procedurali',f:[
+ R('pkCount','Numero picchi',1,64,1,3,c=>c.driver==1),R('pkSeed','Seme picchi',0,1000000,1,0,c=>c.driver==1),
+ R('pkOX','Offset picchi X',-2000,2000,1,0,c=>c.driver==1),R('pkOY','Offset picchi Y',-2000,2000,1,0,c=>c.driver==1),
+ S('comb','Combinazione',['Max','Smooth Max','Somma limitata'],0,c=>c.driver==1)]},
+{g:'Mappa B/N (immagine)',f:[
+ {k:'img',t:'file',l:'Immagine B/N'},
+ R('imgC','Contrasto mappa',0.01,10,0.01,1),C('imgInv','Inverti mappa',false),
+ R('imgS','Scala mappa',0.01,20,0.01,1),R('imgOX','Offset mappa X',-10,10,0.01,0),R('imgOY','Offset mappa Y',-10,10,0.01,0)]},
+{g:'Noise (sorgente altezza)',f:[
+ R('nScale','Scala noise (mm)',1,2000,1,120),R('nDet','Dettaglio noise',0,8,1,2),R('nSeed','Variante noise',-1000,1000,1,0),R('nCon','Contrasto noise',0.01,10,0.01,1.5)]},
+{g:'Orbita comune – basi bloccate',open:1,f:[
+ C('orbOn','Tip Orbit attivo',true),C('orbFree','Anteprima libera 0–360° (non certificata)',true,orbOn),
+ R('orbAng','Tip Orbit Angle (°)',0,360,1,15,orbOn),S('orbDir','Direzione',['Antiorario','Orario'],0,orbOn),
+ R('orbR','Raggio influenza (mm)',1,2000,1,150,orbOn),R('twSeg','Segmenti verticali',1,24,1,12,orbOn)]},
+{g:'Forma – base / punta',open:1,f:[
+ S('src','Tipo di blocco',['Cono / piramide N-gono','Prisma'],0),
+ R('sides','Lati',3,64,1,5),R('topR','Rapporto raggio punta',0.01,1,0.01,0.15,c=>c.src==0),
+ R('baseS','Scala base',0.05,2,0.01,1),R('tipS','Scala punta',0.05,4,0.01,1),
+ S('shT','Estremità da scalare',['Base','Punta','Entrambe'],2),R('shS','Scala selezionata',0.05,2,0.01,1),
+ S('scMode','Modalità scala',['Solo Z','Uniforme','Z + compensazione conicità'],0)]},
+{g:'Torsione locale / Tip Vortex (solo con Orbita disattiva)',f:[
+ R('OM','Organic master',0,1,0.01,0.5,orbOff),R('twAmt','Torsione (°)',0,720,1,60,orbOff),
+ S('twMode','Modo torsione',['Costante','Per altezza','Per angolo vortice','Per flusso'],0,orbOff),
+ S('twEase','Easing torsione',['Lineare','Ease-in','Ease-out','Curva S'],1,orbOff),
+ S('twDir','Direzione torsione',['Antiorario','Orario','Segno del flusso'],0,orbOff),
+ R('twStart','Inizio torsione',0,0.9,0.01,0.25,orbOff),R('tipRot','Rotazione punta (°)',-360,360,1,45,orbOff),
+ R('lean','Inclinazione (°)',0,60,0.5,0,orbOff),
+ C('tvOn','Tip Vortex attivo',true,orbOff),R('tvAmt','Tip Vortex (mm)',0,30,0.1,6,orbOff),
+ R('tfStart','Inizio flusso punta',0,0.9,0.01,0,orbOff),S('tfEase','Easing flusso punta',['Lineare','Ease-in','Curva S'],1,orbOff),
+ R('swR','Raggio vortice (mm)',1,2000,1,150,orbOff),R('swA','Angolo vortice (°)',0,1440,1,270,orbOff),
+ R('swArms','Bracci vortice',1,16,1,1,orbOff),S('swDir','Direzione vortice',['Antiorario','Orario'],0,orbOff),
+ S('swFall','Decadimento vortice',['Lineare','Smooth','Esponenziale','Gaussiano'],1,orbOff),
+ R('swCoup','Accoppiamento altezza/vortice',0,1,0.01,0,orbOff)]},
+{g:'Limiti di stampa',f:[
+ R('minFeat','Dettaglio minimo (mm)',0.4,10,0.1,0.8),R('minTip','Diametro minimo punta (mm)',0.4,20,0.1,1.2),
+ R('minBase','Diametro minimo base (mm)',0.8,50,0.1,4),R('maxAR','Rapporto massimo altezza/diametro',0.1,10,0.1,3),
+ R('maxOv','Sbalzo massimo (°)',0,80,1,45),R('baseTol','Tolleranza base (mm)',0.001,0.2,0.001,0.05)]},
+{g:'Base del pannello e layer continuo',f:[
+ C('bpOn','Base aggiuntiva visibile',false),R('bpT','Spessore base aggiuntiva (mm)',0.8,20,0.1,3,c=>c.bpOn),
+ C('zgOn','Gap zero: layer continuo',true),R('zgT','Spessore layer a gap zero (mm)',0.1,20,0.1,0.8),
+ C('keepPos','Mantieni coordinate del pannello nell\'export',true),
+ R('exX','Ingombro max X (mm)',10,2000,1,220),R('exY','Ingombro max Y (mm)',10,2000,1,220),R('exZ','Ingombro max Z (mm)',10,2000,1,220)]},
+{g:'Aspetto anteprima',f:[{k:'color',t:'col',l:'Colore'}]}
+];
+const cfg={},FIELDS=[];SCHEMA.forEach(g=>g.f.forEach(f=>{FIELDS.push(f);if(f.df!==undefined)cfg[f.k]=f.df}));
+cfg.color='#e8e4dc';
+
+/* ---------- Immagine heightmap ---------- */
+let IMG=null;
+function loadImg(file){const im=new Image();im.onload=()=>{const cv=document.createElement('canvas');cv.width=cv.height=256;const x=cv.getContext('2d');x.drawImage(im,0,0,256,256);IMG=x.getImageData(0,0,256,256).data;sched()};im.src=URL.createObjectURL(file)}
+function imgGray(u,v){if(!IMG)return 0;const px=clamp(u,0,.9999)*255,py=(1-clamp(v,0,.9999))*255,x0=Math.floor(px),y0=Math.floor(py),fx=px-x0,fy=py-y0;
+ const g=(x,y)=>{const i=(Math.min(y,255)*256+Math.min(x,255))*4;return(.2126*IMG[i]+.7152*IMG[i+1]+.0722*IMG[i+2])/255};
+ return(g(x0,y0)*(1-fx)+g(x0+1,y0)*fx)*(1-fy)+(g(x0,y0+1)*(1-fx)+g(x0+1,y0+1)*fx)*fy}
+
+/* ---------- Noise (approssimazione del Noise Texture di Blender) ---------- */
+const h3=(x,y,z,s)=>{const n=Math.sin(x*127.1+y*311.7+z*74.7+s*19.19)*43758.5453;return n-Math.floor(n)};
+function vn(x,y,z,s){const xi=Math.floor(x),yi=Math.floor(y),zi=Math.floor(z),xf=x-xi,yf=y-yi,zf=z-zi,u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf),w=zf*zf*(3-2*zf),l=(a,b,t)=>a+(b-a)*t;
+ return l(l(l(h3(xi,yi,zi,s),h3(xi+1,yi,zi,s),u),l(h3(xi,yi+1,zi,s),h3(xi+1,yi+1,zi,s),u),v),l(l(h3(xi,yi,zi+1,s),h3(xi+1,yi,zi+1,s),u),l(h3(xi,yi+1,zi+1,s),h3(xi+1,yi+1,zi+1,s),u),v),w)}
+function fbm(x,y,z,oct,s){let a=1,f=1,t=0,m=0;for(let i=0;i<=oct;i++){t+=a*vn(x*f,y*f,z*f,s);m+=a;a*=.5;f*=2}return .5+(t/m-.5)*1.3}
+function prng(seed){let s=(seed*2654435761+12345)>>>0;return()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296}}
+
+/* ---------- Funzioni del plugin ---------- */
+function fall(u,kind,pw){u=clamp(u);const q=1-u;
+ if(kind==1)return q*q*(3-2*q);if(kind==2)return Math.pow(q,pw);if(kind==3)return(Math.exp(-4*u*u)-Math.exp(-4))/(1-Math.exp(-4));return q}
+const ease=(k,t)=>[t,t*t,1-Math.pow(1-t,2),t*t*(3-2*t)][k];
+const rot=(x,y,a)=>[x*Math.cos(a)-y*Math.sin(a),x*Math.sin(a)+y*Math.cos(a)];
+
+/* ---------- Layout: modalità "Numero X/Y" ---------- */
+function layout(c){
+ const n=clamp(Math.round(c.sides),3,64),exact=c.gapMode==1;
+ let fxlo=1e9,fxhi=-1e9,fylo=1e9,fyhi=-1e9;
+ for(let k=0;k<n;k++){const a=2*Math.PI*k/n,x=Math.cos(a),y=Math.sin(a);fxlo=Math.min(fxlo,x);fxhi=Math.max(fxhi,x);fylo=Math.min(fylo,y);fyhi=Math.max(fyhi,y)}
+ const fw=fxhi-fxlo,fh=fyhi-fylo,W=c.W,L=c.L;
+ const zeroGap=c.zgOn&&Math.abs(c.gap)<1e-7,gap=zeroGap?0:Math.max(c.gap,c.gapFloor,.4);
+ const lean=c.maxH*Math.tan(Math.min(c.lean*c.OM,c.maxOv)*D2R),fitGap=exact?gap:gap+2*lean;
+ const tf=[c.shS,1,c.shS][c.shT],fitFactor=clamp(c.baseS*tf,1e-4,1);
+ const baseFloor=.5*c.minBase,needed=Math.max(baseFloor,c.minH/Math.max(.001,2*c.maxAR));
+ const fitRmin=needed>baseFloor+1e-4?needed/fitFactor:baseFloor;
+ const fitMinBase=clamp(fitRmin*fitFactor,baseFloor,fitRmin);
+ let mNX,mNY;
+ if(exact){mNX=Math.max(1,Math.floor((W+gap)/(fw*fitMinBase+gap)));mNY=Math.max(1,Math.floor((L+gap)/(fh*fitMinBase+gap)))}
+ else{mNX=Math.max(1,1+Math.floor((W-fw*fitMinBase)/(2*fitRmin+fitGap)));mNY=Math.max(1,1+Math.floor((L-fh*fitMinBase)/(2*fitRmin+fitGap)))}
+ const nx=Math.min(clamp(Math.round(c.cntX),1,200),mNX),ny=Math.min(Math.min(clamp(Math.round(c.cntY),1,200),mNY),Math.floor(20000/nx));
+ let Rmax;
+ if(exact){const bx=(W-(nx-1)*gap)/Math.max(1e-4,nx*fw),by=(L-(ny-1)*gap)/Math.max(1e-4,ny*fh);Rmax=Math.max(0,Math.min(bx,by))}
+ else{const ax=(span,w,n)=>{const iv=Math.max(0,n-1),num=span-iv*fitGap,lin=num/Math.max(1e-4,w*fitFactor+2*iv),res=num-w*baseFloor,fx=res/Math.max(1e-4,2*iv),sg=res>-1e-4?1e6:0;return Math.max(0,Math.min(lin,n>1.5?fx:sg))};
+  Rmax=Math.min(ax(W,fw,nx),ax(L,fh,ny))}
+ const fitR=c.sizeMode==0?Rmax:Math.min(Rmax,Math.max(fitRmin,.5*c.blkD)),base=clamp(fitR*fitFactor,baseFloor,fitR);
+ let pX,pY;
+ if(exact){pX=fw*base+gap;pY=fh*base+gap}
+ else{pX=nx>1.5?(W-fw*base)/Math.max(1,nx-1):Math.max(W,2*fitR+fitGap);pY=ny>1.5?(L-fh*base)/Math.max(1,ny-1):Math.max(L,2*fitR+fitGap)}
+ const pts=[];
+ for(let idx=0;idx<Math.min(nx*ny,20000);idx++){
+  const row=Math.floor(idx/nx),col=idx%nx;let x,y;
+  if(exact){x=(col-.5*(nx-1))*pX-.5*(fxlo+fxhi)*base;y=(row-.5*(ny-1))*pY-.5*(fylo+fyhi)*base}
+  else{x=nx>1.5?-.5*W-fxlo*base+col*pX:-.5*(fxlo+fxhi)*base;y=ny>1.5?-.5*L-fylo*base+row*pY:-.5*(fylo+fyhi)*base}
+  const inside=x+fxlo*base>-.5*W-1e-4&&x+fxhi*base<.5*W+1e-4&&y+fylo*base>-.5*L-1e-4&&y+fyhi*base<.5*L+1e-4;
+  if(inside&&2*fitR>c.minBase-1e-4)pts.push({x,y,col,row,cx:(col-.5*(nx-1))*pX,cy:(row-.5*(ny-1))*pY});
+ }
+ return{n,nx,ny,R:fitR,base,pX,pY,pts,gap,exact,zeroGap,lean,fw,fh,fxlo,fxhi,fylo,fyhi,fitFactor,Rmax,gapReal:[pX-fw*base,pY-fh*base],used:[nx*fw*base+(nx-1)*gap,ny*fh*base+(ny-1)*gap]}
+}
+
+/* ---------- Generazione geometria ---------- */
+function build(c){
+ const lay=layout(c),n=lay.n,EF=c.EF,R=lay.R,P=[],blocks=[];
+ const ctrlRad=Math.max(.001,c.cs),ctr=[c.cx,c.cy],orbH=Math.max(.001,c.maxH);
+ const tfB=[c.shS,1,c.shS][c.shT],tfT=[1,c.shS,c.shS][c.shT],baseF=c.baseS*tfB,tipF=c.tipS*tfT;
+ const orbInf=Math.max(.001,c.orbR*EF*ctrlRad),free=c.orbOn&&c.orbFree;
+ /* angolo orbitale effettivo */
+ let orbAngle=0,orbLimit=0;
+ if(c.orbOn){
+  const envR=R,obr=clamp(envR*baseF,.5*c.minBase,envR),otratio=c.src==1?1:c.topR;
+  const otmin=Math.max(c.minTip,c.minFeat)/(2*Math.cos(Math.PI/n)),otr=clamp(envR*otratio*tipF,otmin,envR);
+  let orbRadius=Math.max(obr,otr);if(c.scMode==2)orbRadius=envR;
+  let maxd=0;lay.pts.forEach(p=>maxd=Math.max(maxd,Math.hypot(p.x-ctr[0],p.y-ctr[1])));
+  const rb=Math.max(.001,maxd+orbRadius),cGap=Math.min(lay.pX-lay.fw*orbRadius,lay.pY-lay.fh*orbRadius),initGap=Math.max(.0001,cGap);
+  const over=Math.tan(c.maxOv*D2R),vC=Math.min(rb,.27*orbInf)/orbH,rC=8/9,shC=Math.hypot(vC,rC),aOver=Math.min(Math.PI/2,over/Math.max(.0001,vC));
+  const seg=clamp(c.twSeg,12,24),sag=aOver*aOver*(.19*orbInf)/(4*seg*seg),reqGap=lay.gap+sag+.0001,sN=clamp(reqGap/initGap,.0001,1),cl=Math.max(0,1/sN-sN);
+  orbLimit=Math.min(aOver,cl/Math.max(.0001,shC));
+  const req=D2R*clamp(Math.abs(c.orbAng),0,360);
+  orbAngle=(c.orbDir==0?1:-1)*(free?req:Math.min(req,orbLimit));
+ }
+ /* picchi procedurali */
+ const peaks=[];
+ {const r=prng(c.pkSeed);for(let i=0;i<c.pkCount;i++){let x=0,y=0;if(c.pkCount>1){x=(r()*2-1)*.6*.5*c.W;y=(r()*2-1)*.6*.5*c.L}peaks.push([x+c.pkOX,y+c.pkOY])}}
+ const swC=[0,0],swAng=c.swA*D2R;let removed=0;
+ for(const p of lay.pts){
+  const rest=[p.x,p.y],dc=[rest[0]-ctr[0],rest[1]-ctr[1]],crd=Math.hypot(dc[0],dc[1]);
+  const cR=Math.max(.001,c.pkR*EF*ctrlRad),cS=Math.min(c.soft*EF*ctrlRad,.95*cR);
+  const ctrlH=fall((crd-cS)/Math.max(.001,cR-cS),c.fallT,c.fallP);
+  let pkH=0;
+  if(c.driver==1||c.driver==4){const rad=Math.max(c.pkR,.001)*EF,st=Math.min(c.soft*EF,.95*rad);
+   peaks.forEach(pk=>{const d=Math.hypot(rest[0]-pk[0],rest[1]-pk[1]),v=clamp(fall((d-st)/Math.max(rad-st,1e-4),c.fallT,c.fallP)),a=pkH,b=v,mx=Math.max(a,b),k=.15;
+    pkH=clamp([mx,mx+(Math.min(a,b)>0?Math.pow(Math.max(0,k-Math.abs(a-b)),2)/(4*k):0),a+b][c.comb])})}
+  let gray=0;
+  if(c.driver==2||c.driver==4){gray=imgGray(.5+c.imgS*rest[0]/c.W+c.imgOX,.5+c.imgS*rest[1]/c.L+c.imgOY);gray=clamp(.5+(gray-.5)*c.imgC);if(c.imgInv)gray=1-gray}
+  const ns=1/Math.max(.001,c.nScale*EF),nH=clamp(.5+(fbm(rest[0]*ns,rest[1]*ns,c.nSeed*.37,c.nDet,1)-.5)*c.nCon);
+  let hv=[ctrlH,pkH,gray,nH,Math.max(ctrlH,Math.max(gray,nH))][c.driver];
+  if(c.inv)hv=1-hv;
+  /* theta del vortice (Tip Vortex o campo globale) */
+  const dirS=c.swDir==0?1:-1,vR=Math.max(.001,c.swR*EF*ctrlRad),vF=fall(crd/vR,c.swFall,c.fallP),vAz=Math.atan2(dc[1],dc[0]);
+  const tipTheta=swAng*vF*Math.cos(c.swArms*vAz)*dirS,th=tipTheta;
+  hv=clamp(hv+c.swCoup*Math.abs(th)/Math.max(.001,swAng));
+  const fs=1/Math.max(1e-3,c.flowScale*EF),flow=2*fbm(rest[0]*fs,rest[1]*fs,c.flowSeed*.37,c.flowOct,2)-1;
+  let H=c.minH+(c.maxH-c.minH)*hv;
+  H=clamp(H*c.HS+flow*c.hNoise,c.minH,c.maxH);H=Math.min(H,2*R*c.maxAR);
+  /* punta minima */
+  let minTip=Math.max(c.minTip,c.minFeat);
+  if(c.orbOn&&!c.orbFree){const tc=Math.hypot(p.x-ctr[0],p.y-ctr[1]),ul=clamp((tc-R)/orbInf),uh=clamp((tc+R)/orbInf),up=clamp(2/3,ul,uh),
+   sh=Math.abs(orbAngle)*(H/orbH)*6*up*up*(1-up),sg=2/(Math.sqrt(4+sh*sh)+sh);minTip=minTip*1.01/Math.max(.52,sg)}
+  const baseR=clamp(R*baseF,.5*c.minBase,R);H=Math.min(H,2*baseR*c.maxAR);
+  const tRatio=c.src==1?1:c.topR,cosH=Math.cos(Math.PI/n);
+  let tipR=clamp(R*tRatio*tipF,minTip/(2*cosH),R);
+  if(c.scMode==2)tipR=Math.min(R,tipR/Math.sqrt(Math.max(.1,hv)));
+  /* torsione locale (orbita disattiva) */
+  const leanSlope=Math.tan(Math.min(c.lean*c.OM,c.maxOv)*D2R),slopeBudget=Math.max(0,Math.tan(c.maxOv*D2R)-leanSlope);
+  const easMax=[1,2,2,1.5][c.twEase]/Math.max(.1,1-c.twStart);
+  const mf=[1,hv,Math.abs(th)/Math.max(.001,swAng),Math.abs(flow)][c.twMode];
+  const req=c.twAmt*D2R*c.OM*mf+c.tipRot*D2R,twLim=slopeBudget*H/Math.max(.001,R*easMax);
+  let tw=(req<0?-1:1)*Math.min(Math.abs(req),twLim);tw*=[1,-1,flow<0?-1:1][c.twDir];
+  const tfMax=[1,2,1.5][c.tfEase]/Math.max(.1,1-c.tfStart),twSlope=R*Math.abs(tw)*easMax/Math.max(.001,H),remain=Math.max(0,slopeBudget-twSlope);
+  let tipShift=c.tvAmt*c.OM*vF;tipShift=Math.min(tipShift,Math.max(0,R-Math.min(R,tipR)));tipShift=Math.min(tipShift,remain*H/tfMax);if(!c.tvOn)tipShift=0;
+  const fd=rot(dc[0],dc[1],tipTheta+Math.PI/2*dirS),fdl=Math.hypot(fd[0],fd[1])||1,fdx=fd[0]/fdl,fdy=fd[1]/fdl;
+  const fl=[fbm(rest[0]*fs,rest[1]*fs,c.flowSeed*.37+5,c.flowOct,3)-.5,fbm(rest[0]*fs,rest[1]*fs,c.flowSeed*.37+9,c.flowOct,4)-.5],fll=Math.hypot(fl[0],fl[1])||1,lx_=fl[0]/fll,ly_=fl[1]/fll;
+  let segs=(Math.max(Math.abs(tw),tipShift)>1e-6)?clamp(Math.round(c.twSeg),1,24):1;
+  if(c.orbOn)segs=free?24:clamp(Math.round(c.twSeg),12,24);
+  const rb=baseR,rt=Math.min(R,tipR),start=P.length,V=[];
+  for(let s=0;s<=segs;s++){const t=s/segs,r=rb+(rt-rb)*t,z=H*t;V.push([]);
+   for(let k=0;k<n;k++){const a=2*Math.PI*k/n;let lx=r*Math.cos(a),ly=r*Math.sin(a),X,Y;
+    if(c.orbOn){const wx=lx+p.x,wy=ly+p.y,dx=wx-ctr[0],dy=wy-ctr[1],u=clamp(Math.hypot(dx,dy)/orbInf),w=1-3*u*u+2*u*u*u,phi=orbAngle*(z/orbH)*w,q=rot(dx,dy,phi);X=ctr[0]+q[0];Y=ctr[1]+q[1]}
+    else{const z01=clamp(z/Math.max(H,.001)),t2=clamp((z01-c.twStart)/Math.max(.1,1-c.twStart)),q=rot(lx,ly,tw*ease(c.twEase,t2)),ft=clamp((z01-c.tfStart)/Math.max(.1,1-c.tfStart)),fe=[ft,ft*ft,ft*ft*(3-2*ft)][c.tfEase],av=Math.max(.001,R-tipShift*fe),sc=Math.min(1,av/Math.max(.001,Math.hypot(q[0],q[1])));
+     X=p.x+q[0]*sc+fdx*tipShift*fe+lx_*z*leanSlope;Y=p.y+q[1]*sc+fdy*tipShift*fe+ly_*z*leanSlope}
+    V[s].push([X,Y,z])}}
+  const T=[],tri=(a,b,d)=>T.push(...a,...b,...d);
+  for(let s=0;s<segs;s++)for(let k=0;k<n;k++){const q=(k+1)%n;tri(V[s][k],V[s][q],V[s+1][q]);tri(V[s][k],V[s+1][q],V[s+1][k])}
+  for(let k=1;k<n-1;k++){tri(V[segs][0],V[segs][k],V[segs][k+1]);tri(V[0][0],V[0][k+1],V[0][k])}
+  /* controlli di stampa (solo se non in anteprima libera) */
+  if(!free){let bad=H<c.minH-1e-5||2*R<minTip-1e-5;
+   for(let i=0;i<T.length&&!bad;i+=9){const a=[T[i+3]-T[i],T[i+4]-T[i+1],T[i+5]-T[i+2]],b=[T[i+6]-T[i],T[i+7]-T[i+1],T[i+8]-T[i+2]],
+    nx=a[1]*b[2]-a[2]*b[1],ny=a[2]*b[0]-a[0]*b[2],nz=a[0]*b[1]-a[1]*b[0],ln=Math.hypot(nx,ny,nz),cz=(T[i+2]+T[i+5]+T[i+8])/3;
+    if(ln/2<1e-9||(cz>c.baseTol&&nz/(ln||1)<-Math.sin(c.maxOv*D2R)-1e-5))bad=true}
+   if(bad){removed++;continue}}
+  for(let i=0;i<T.length;i++)P.push(T[i]);
+  blocks.push({col:p.col,row:p.row,cx:p.cx,cy:p.cy,x:p.x,y:p.y,H,off:start,len:T.length});
+ }
+ /* base */
+ const Tb=c.bpOn?Math.max(.1,c.bpT):0,F=lay.zeroGap?Math.max(.1,c.zgT):0;
+ return{pos:new Float32Array(P),blocks,lay,Tb,F,removed,orbAngle,orbLimit,free}
+}
+function boxTris(x0,y0,z0,x1,y1,z1){const v=[[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]],
+ f=[[0,2,1],[0,3,2],[4,5,6],[4,6,7],[0,1,5],[0,5,4],[1,2,6],[1,6,5],[2,3,7],[2,7,6],[3,0,4],[3,4,7]],o=[];f.forEach(t=>t.forEach(i=>o.push(...v[i])));return o}
+function baseTris(M,rect){const d=M.Tb+M.F;if(d<1e-5)return[];const[x0,y0,x1,y1]=rect;return boxTris(x0,y0,-M.Tb,x1,y1,M.F)}
+const panelRect=c=>[-c.W/2,-c.L/2,c.W/2,c.L/2];
+
+/* ---------- Scena 3D ---------- */
+const cv=$('c'),ren=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
+const scn=new THREE.Scene(),cam=new THREE.PerspectiveCamera(40,1,1,20000);cam.up.set(0,0,1);
+scn.add(new THREE.HemisphereLight(0xffffff,0x555555,.9));
+const dl=new THREE.DirectionalLight(0xffffff,.9);dl.position.set(-200,-300,500);scn.add(dl);
+let mesh,baseMesh,M,th_=-.7,ph_=.95,dist=620;
+const mk=(arr,col)=>{const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(arr),3));g.computeVertexNormals();return new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:col,roughness:.7,side:THREE.DoubleSide}))};
+function sched(){cancelAnimationFrame(sched.t);sched.t=requestAnimationFrame(update)}
+function update(){
+ M=build(cfg);
+ [mesh,baseMesh].forEach(m=>{if(m){m.geometry.dispose();scn.remove(m)}});
+ mesh=mk(M.pos,cfg.color);scn.add(mesh);
+ const bt=baseTris(M,panelRect(cfg));baseMesh=null;
+ if(bt.length){baseMesh=mk(bt,'#3d4a52');scn.add(baseMesh)}
+ const l=M.lay,gx=l.nx>1?l.gapReal[0].toFixed(2):'-',gy=l.ny>1?l.gapReal[1].toFixed(2):'-';
+ $('info').textContent='Griglia effettiva: '+l.nx+' × '+l.ny+' = '+l.nx*l.ny+' blocchi'+(M.removed?' ('+M.removed+' rimossi dai controlli di stampa)':'')+
+  '\nDiametro base: '+(2*l.base).toFixed(2)+' mm · Diametro max: '+(2*l.Rmax).toFixed(2)+' mm\nPasso X/Y: '+l.pX.toFixed(2)+' / '+l.pY.toFixed(2)+' mm · Gap reale X/Y: '+gx+' / '+gy+' mm'+
+  (cfg.orbOn?'\nAngolo orbita applicato: '+Math.abs(M.orbAngle/D2R).toFixed(2)+'°'+(M.free?' (anteprima libera, non certificata)':' (limite sicuro '+(M.orbLimit/D2R).toFixed(2)+'°)'):'');
+ const w=[];
+ if(l.nx!=Math.round(cfg.cntX)||l.ny!=Math.round(cfg.cntY))w.push('Quantità limitata da spazio / base minima.');
+ if(cfg.sizeMode==1&&cfg.blkD>2*l.Rmax+.001)w.push('Diametro richiesto limitato allo spazio.');
+ if(M.free)w.push('ANTEPRIMA LIBERA: la stampabilità non è certificata.');
+ $('warn').textContent=w.join(' ');
+ refreshVis();draw();
+}
+function draw(){const s=Math.max(cfg.W,cfg.L)/300;
+ cam.position.set(dist*s*Math.sin(ph_)*Math.cos(th_),dist*s*Math.sin(ph_)*Math.sin(th_),dist*s*Math.cos(ph_));
+ cam.lookAt(0,0,cfg.maxH/3);ren.render(scn,cam)}
+function resize(){const m=cv.parentElement;ren.setSize(m.clientWidth,m.clientHeight,false);cam.aspect=m.clientWidth/m.clientHeight;cam.updateProjectionMatrix();if(M)draw()}
+new ResizeObserver(resize).observe(cv.parentElement);
+let dr=null;
+cv.onpointerdown=e=>{dr=[e.clientX,e.clientY];cv.setPointerCapture(e.pointerId)};cv.onpointerup=()=>dr=null;
+cv.onpointermove=e=>{if(!dr)return;th_-=(e.clientX-dr[0])*.008;ph_=clamp(ph_-(e.clientY-dr[1])*.008,.05,1.5);dr=[e.clientX,e.clientY];draw()};
+cv.onwheel=e=>{e.preventDefault();dist=clamp(dist*(1+e.deltaY*.001),120,3000);draw()};
+
+/* ---------- Interfaccia ---------- */
+const ui=$('ui'),els={};
+SCHEMA.forEach(g=>{const d=document.createElement('details');if(g.open)d.open=true;d.innerHTML='<summary>'+g.g+'</summary>';const b=document.createElement('div');b.className='in';d.append(b);
+ g.f.forEach(f=>{const r=document.createElement('div');r.className='row';f.row=r;
+  if(f.t=='r'){r.innerHTML='<label>'+f.l+'</label><div class="c"><input type="range" min="'+f.mn+'" max="'+f.mx+'" step="'+f.st+'" value="'+f.df+'"><input type="number" min="'+f.mn+'" max="'+f.mx+'" step="'+f.st+'" value="'+f.df+'"></div>';
+   const[a,n]=r.querySelectorAll('input');a.oninput=()=>{cfg[f.k]=+a.value;n.value=a.value;sched()};n.onchange=()=>{const v=clamp(+n.value,f.mn,f.mx);cfg[f.k]=v;a.value=v;n.value=v;sched()};f.set=v=>{cfg[f.k]=v;a.value=v;n.value=v}}
+  else if(f.t=='s'){r.innerHTML='<label>'+f.l+'</label><select>'+f.o.map((o,i)=>'<option value="'+i+'">'+o+'</option>').join('')+'</select>';const s=r.querySelector('select');s.value=f.df;s.onchange=()=>{cfg[f.k]=+s.value;sched()};f.set=v=>{cfg[f.k]=v;s.value=v}}
+  else if(f.t=='c'){r.innerHTML='<label><span><input type="checkbox"> '+f.l+'</span></label>';const s=r.querySelector('input');s.checked=f.df;s.onchange=()=>{cfg[f.k]=s.checked;sched()};f.set=v=>{cfg[f.k]=!!v;s.checked=!!v}}
+  else if(f.t=='file'){r.innerHTML='<label>'+f.l+'</label><input type="file" accept="image/*">';r.querySelector('input').onchange=e=>{if(e.target.files[0])loadImg(e.target.files[0])};f.set=()=>{}}
+  else if(f.t=='col'){r.innerHTML='<label>'+f.l+'</label><input type="color" value="'+cfg.color+'">';const s=r.querySelector('input');s.oninput=()=>{cfg.color=s.value;sched()};f.set=v=>{cfg.color=v;s.value=v}}
+  b.append(r)});ui.append(d)});
+function refreshVis(){FIELDS.forEach(f=>{if(f.row)f.row.style.display=(!f.show||f.show(cfg))?'':'none'})}
+if(!SHOW_EXPORT_TO_CLIENT)$('exp').style.display='none';
+
+/* ---------- Export ---------- */
+const say=t=>$('msg').textContent=t;
+const save=(blob,name)=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500)};
+function stlBlob(parts){let nT=0;parts.forEach(p=>nT+=p.length/9);const buf=new ArrayBuffer(84+nT*50),dv=new DataView(buf);dv.setUint32(80,nT,true);let o=84;
+ parts.forEach(p=>{for(let t=0;t<p.length;t+=9){const u=[p[t+3]-p[t],p[t+4]-p[t+1],p[t+5]-p[t+2]],v=[p[t+6]-p[t],p[t+7]-p[t+1],p[t+8]-p[t+2]];
+  let nx=u[1]*v[2]-u[2]*v[1],ny=u[2]*v[0]-u[0]*v[2],nz=u[0]*v[1]-u[1]*v[0];const l=Math.hypot(nx,ny,nz)||1;
+  [nx/l,ny/l,nz/l].forEach(q=>{dv.setFloat32(o,q,true);o+=4});for(let i=0;i<9;i++){dv.setFloat32(o,p[t+i],true);o+=4}o+=2}});return new Blob([buf],{type:'model/stl'})}
+const blockTris=b=>Array.from(M.pos.subarray(b.off,b.off+b.len));
+function shift(arr,dx,dy,dz){const o=arr.slice();for(let i=0;i<o.length;i+=3){o[i]+=dx;o[i+1]+=dy;o[i+2]+=dz}return o}
+function zipOf(items,manifest,name){if(!window.JSZip){say('Libreria ZIP non disponibile.');return}const z=new JSZip();items.forEach(i=>z.file(i.name,stlBlob([i.tris])));z.file('manifest.json',JSON.stringify(manifest,null,1));
+ z.generateAsync({type:'blob'}).then(b=>save(b,name))}
+function exportInd(withBase){
+ const l=M.lay,items=[],man=[];
+ M.blocks.forEach(b=>{let parts=blockTris(b),ox=0,oy=0;
+  if(withBase)parts=parts.concat(baseTris(M,[b.cx-l.pX/2,b.cy-l.pY/2,b.cx+l.pX/2,b.cy+l.pY/2]));
+  if(!cfg.keepPos){ox=-b.cx;oy=-b.cy;parts=shift(parts,ox,oy,0)}
+  const nm='blocco_r'+(b.row+1)+'_c'+(b.col+1)+'.stl';items.push({name:nm,tris:parts});man.push({file:nm,riga:b.row+1,colonna:b.col+1,offset_x:ox,offset_y:oy,altezza:+b.H.toFixed(3)})});
+ zipOf(items,{tipo:withBase?'singoli_con_base':'singoli_senza_base',unita:'mm',mantieni_coordinate:cfg.keepPos,pezzi:man},withBase?'singoli-con-base.zip':'singoli-senza-base.zip');say(items.length+' file nel ZIP.')}
+function exportSectors(){
+ const l=M.lay,sx=Math.max(1,Math.floor(cfg.exX/l.pX)),sy=Math.max(1,Math.floor(cfg.exY/l.pY)),map={};
+ M.blocks.forEach(b=>{const k=Math.floor(b.col/sx)+'_'+Math.floor(b.row/sy);(map[k]=map[k]||[]).push(b)});
+ const items=[],man=[];let tall=0;
+ Object.keys(map).forEach(k=>{const bs=map[k],cols=bs.map(b=>b.col),rows=bs.map(b=>b.row),c0=Math.min(...cols),c1=Math.max(...cols),r0=Math.min(...rows),r1=Math.max(...rows);
+  const rect=[bs.find(b=>b.col==c0).cx-l.pX/2,bs.find(b=>b.row==r0).cy-l.pY/2,bs.find(b=>b.col==c1).cx+l.pX/2,bs.find(b=>b.row==r1).cy+l.pY/2];
+  let parts=[];bs.forEach(b=>parts=parts.concat(blockTris(b)));parts=parts.concat(baseTris(M,rect));let ox=0,oy=0;
+  if(!cfg.keepPos){ox=-rect[0];oy=-rect[1];parts=shift(parts,ox,oy,0)}
+  const hz=Math.max(...bs.map(b=>b.H))+M.Tb;if(hz>cfg.exZ)tall++;
+  const nm='settore_'+(r0+1)+'-'+(r1+1)+'_'+(c0+1)+'-'+(c1+1)+'.stl';items.push({name:nm,tris:parts});man.push({file:nm,righe:[r0+1,r1+1],colonne:[c0+1,c1+1],offset_x:ox,offset_y:oy})});
+ zipOf(items,{tipo:'settori_con_base',unita:'mm',ingombro_max:[cfg.exX,cfg.exY,cfg.exZ],settori:man},'settori-con-base.zip');
+ say(items.length+' settori.'+(tall?' Attenzione: '+tall+' superano l\'altezza max Z.':''))}
+$('bStlAll').onclick=()=>{save(stlBlob([Array.from(M.pos),baseTris(M,panelRect(cfg))]),'pannello-con-base.stl')};
+$('bStlNoBase').onclick=()=>save(stlBlob([Array.from(M.pos)]),'rilievi.stl');
+$('bZipInd').onclick=()=>exportInd(false);$('bZipBase').onclick=()=>exportInd(true);$('bZipSec').onclick=exportSectors;
+
+/* ---------- Riepilogo, PDF, invio ---------- */
+function summary(){
+ const L=[];SCHEMA.forEach(g=>{L.push('['+g.g+']');g.f.forEach(f=>{if(f.t=='file')return;if(f.show&&!f.show(cfg))return;let v=cfg[f.k];if(f.t=='s')v=f.o[v];if(f.t=='c')v=v?'sì':'no';L.push(' '+f.l+': '+v)})});
+ if(IMG)L.push(' (immagine B/N caricata: da richiedere al cliente)');
+ L.push('');L.push($('info').textContent);return L.join('\n')}
+function pdf(){
+ const{jsPDF}=window.jspdf,d=new jsPDF(),w=d.internal.pageSize.getWidth();
+ d.setFontSize(18);d.text('Scheda configurazione - Pannello 3D',15,18);
+ d.setFontSize(10);d.text(new Date().toLocaleDateString('it-IT')+($('nome').value?'  |  Cliente: '+$('nome').value:'')+'  |  Ingombro max: '+dims().join(' x ')+' mm',15,25);
+ draw();const img=cv.toDataURL('image/png'),ih=Math.min((w-30)*cv.height/cv.width,105);d.addImage(img,'PNG',15,30,w-30,ih);
+ let y=30+ih+9;d.setFontSize(9);
+ summary().split('\n').forEach(l=>{if(y>284){d.addPage();y=18}if(l.startsWith('[')){d.setFont(undefined,'bold');y+=2}else d.setFont(undefined,'normal');d.text(l,15,y);y+=4.6});
+ if($('note').value){y+=4;d.text('Note: '+$('note').value,15,y,{maxWidth:w-30})}
+ d.save('configurazione-pannello-3d.pdf')}
+function dims(){let x0=1e9,y0=1e9,z0=1e9,x1=-1e9,y1=-1e9,z1=-1e9;const p=M.pos;
+ for(let i=0;i<p.length;i+=3){x0=Math.min(x0,p[i]);x1=Math.max(x1,p[i]);y0=Math.min(y0,p[i+1]);y1=Math.max(y1,p[i+1]);z0=Math.min(z0,p[i+2]);z1=Math.max(z1,p[i+2])}
+ if(M.Tb+M.F>1e-5){x0=Math.min(x0,-cfg.W/2);x1=Math.max(x1,cfg.W/2);y0=Math.min(y0,-cfg.L/2);y1=Math.max(y1,cfg.L/2);z0=Math.min(z0,-M.Tb);z1=Math.max(z1,M.F)}
+ return[x1-x0,y1-y0,z1-z0].map(v=>Math.round(v*10)/10)}
+function thumb(){draw();const s=document.createElement('canvas');s.width=360;s.height=Math.max(1,Math.round(360*cv.height/cv.width));const x=s.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,s.width,s.height);x.drawImage(cv,0,0,s.width,s.height);return s.toDataURL('image/jpeg',.82).split(',')[1]}
+async function b64(blob){const u=new Uint8Array(await blob.arrayBuffer());let s='';for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)}
+async function send(){
+ const nome=$('nome').value.trim(),tel=$('tel').value.trim(),email=$('email').value.trim();
+ if(!nome||!/^[+()\d\s.\-]{6,20}$/.test(tel)||!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){say('Inserisci nome, telefono ed email validi.');return}
+ if(!$('priv').checked){say('Serve il consenso al trattamento dei dati.');return}
+ say('Invio in corso…');
+ const dm=dims(),link=location.origin+location.pathname+'#cfg='+encodeURIComponent(btoa(JSON.stringify(cfg)));
+ const txt=summary()+'\n\nCliente: '+nome+'\nTelefono: '+tel+'\nEmail: '+email+'\nNote: '+$('note').value+'\nIngombro max (mm): '+dm.join(' x ')+'\nApri la configurazione: '+link;
+ if(WORKER_URL){try{
+  const payload={nome,tel,email,note:$('note').value,hp:$('hp').value,dims:dm,thumb:thumb(),summary:summary(),config:cfg,link,hasImage:!!IMG};
+  if(SEND_STL){const b=stlBlob([Array.from(M.pos),baseTris(M,panelRect(cfg))]);if(b.size<8e6)payload.stl=await b64(b)}
+  const r=await fetch(WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  say(r.ok?'Fatto! Ti abbiamo inviato una email di riepilogo.':'Invio non riuscito, riprova.');return}catch(e){say('Invio non riuscito, riprova.');return}}
+ if(FORM_URL){try{const r=await fetch(FORM_URL,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},
+  body:JSON.stringify({nome,telefono:tel,email,note:$('note').value,ingombro_mm:dm.join(' x '),configurazione:summary(),link})});
+  say(r.ok?'Configurazione inviata, grazie!':'Invio non riuscito, riprova.');return}catch(e){say('Invio non riuscito, riprova.');return}}
+ location.href='mailto:'+OWNER_EMAIL+'?subject='+encodeURIComponent('Configurazione pannello 3D')+'&body='+encodeURIComponent(txt);
+ say('Si apre la tua email: premi Invia per spedire la configurazione.')}
+$('bPdf').onclick=pdf;$('bSend').onclick=send;
+$('bCopy').onclick=()=>{const j=JSON.stringify(cfg);save(new Blob([j],{type:'application/json'}),'configurazione-pannello.json');navigator.clipboard&&navigator.clipboard.writeText(summary()).catch(()=>{});say('Configurazione scaricata (JSON) e copiata come testo.')};
+$('bLoad').onclick=()=>$('fLoad').click();
+$('fLoad').onchange=e=>{const f=e.target.files[0];if(!f)return;f.text().then(t=>{try{const o=JSON.parse(t);FIELDS.forEach(x=>{if(x.k in o&&x.set)x.set(o[x.k])});sched();say('Configurazione caricata.')}catch(err){say('File non valido.')}})};
+try{const m=location.hash.match(/#cfg=([^&]+)/);if(m){const o=JSON.parse(atob(decodeURIComponent(m[1])));FIELDS.forEach(x=>{if(x.k in o&&x.set)x.set(o[x.k])})}}catch(e){}
+resize();update();
+</script>
+</body>
+</html>
