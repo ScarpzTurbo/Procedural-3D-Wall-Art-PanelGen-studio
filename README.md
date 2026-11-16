@@ -29,4 +29,4 @@ GARANZIE E LIMITI
 Le unioni con base sono controllate per volume positivo, un solo componente, bordi manifold e facce non degeneri. Vengono verificati ingombro, file STL binario e reimportazione. Sbalzi, supporti e dimensioni delle punte in anteprima libera richiedono comunque una verifica di stampa. Non sono aggiunti incastri meccanici: le basi sono affiancabili per assemblaggio/incollaggio.
 Le vecchie opzioni avanzate Custom Collection, certificazione di mesh arbitrarie e image blur non sono dichiarate implementate. Non sono necessarie ai pulsanti principali verificati.
 
-Il plugin funziona localmente, senza il connettore Higgsfield. In file non ancora salvati, gli export vanno nella cartella PanelGen_Exports della home utente.
+Il plugin funziona localmente. In file non ancora salvati, gli export vanno nella cartella PanelGen_Exports della home utente.
